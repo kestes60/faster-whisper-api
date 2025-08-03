@@ -1,59 +1,29 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import PlainTextResponse
-import uvicorn
-import tempfile
-import os
-import subprocess
-import torch
-from faster_whisper import WhisperModel
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File, Request
+from youtube_jobs import *
+import uuid, shutil, os
 
 app = FastAPI()
 
-# Load FasterWhisper once
-model = WhisperModel("base", device="cuda" if torch.cuda.is_available() else "cpu")
+@app.post("/transcribe-youtube")
+async def transcribe_youtube(request: Request):
+    data = await request.json()
+    url = data.get("url")
+    job_id = str(uuid.uuid4())
+    update_job_status(job_id, "queued")
+    threading.Thread(target=transcribe_youtube_video, args=(job_id, url)).start()
+    return {"job_id": job_id, "status": "queued"}
 
-# ========== Local File Transcription ==========
-@app.post("/transcribe", response_class=PlainTextResponse)
-async def transcribe_audio(file: UploadFile = File(...)):
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp:
-            temp.write(await file.read())
-            temp_path = temp.name
+@app.get("/status/{job_id}")
+def check_status(job_id: str):
+    return {"job_id": job_id, "status": get_job_status(job_id)}
 
-        segments, _ = model.transcribe(temp_path)
-        transcript = " ".join([segment.text for segment in segments])
-        os.remove(temp_path)
-        return transcript
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ========== YouTube Transcription ==========
-class YouTubeURL(BaseModel):
-    url: str
-
-@app.post("/transcribe-youtube", response_class=PlainTextResponse)
-async def transcribe_youtube(data: YouTubeURL):
-    try:
-        url = data.url
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = os.path.join(temp_dir, "audio.m4a")
-
-            result = subprocess.run(
-                ["yt-dlp", "-f", "bestaudio", "-o", temp_path, url],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-
-            if result.returncode != 0:
-                raise Exception(result.stderr.decode())
-
-            segments, _ = model.transcribe(temp_path)
-            transcript = " ".join([segment.text for segment in segments])
-
-            return transcript
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/result/{job_id}")
+def get_result(job_id: str):
+    status = get_job_status(job_id)
+    if status != "done":
+        return {"job_id": job_id, "status": status}
+    path = f"transcriptions/{job_id}.txt"
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return {"job_id": job_id, "transcript": f.read()}
+    return {"error": "Transcript not found"}
