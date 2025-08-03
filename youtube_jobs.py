@@ -36,7 +36,7 @@ def transcribe_youtube_video(job_id, url):
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info).replace(".webm", ".mp3")
+            file_path = ydl.prepare_filename(info)
 
         model = WhisperModel("base", compute_type="int8")
         segments, _ = model.transcribe(file_path)
